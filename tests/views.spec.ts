@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
@@ -318,4 +318,27 @@ it('reads each ticket a page\'s follow-ups reached once, and nothing for a messa
   const records = { tickets: { get: vi.fn() }, threads: { get: vi.fn() }, triggers: store.triggers }
   expect(followupOwners(store.triggers.get('f3')!, records)).toEqual([])
   expect([records.tickets.get, records.threads.get].map(read => read.mock.calls.length)).toEqual([0, 0])
+})
+
+
+it('indexes 10000 shared-ticket subscriptions once per snapshot and refreshes between requests', () => {
+  const host = views()
+  const threads = Array.from({ length: 10000 }, (_, i) => ({ key: 'github:' + i, ref: { source: 'github', id: String(i) },
+    createdAt: '', subscriptions: ['shared', 'shared'], correlated: [], pending: [], meta: {} }))
+  const read = vi.spyOn(store.read, 'subscribedThreads').mockReturnValue(threads)
+  const samples: number[] = []
+  for (let i = 0; i < 5; i++) {
+    const view = snapshot(host)
+    const start = performance.now()
+    const indexed = view.threadsOf('shared')
+    samples.push(performance.now() - start)
+    expect(indexed).toHaveLength(20000)
+    expect(indexed[0]).toBe(threads[0]); expect(indexed.at(-1)).toBe(threads.at(-1))
+    expect(view.threadsOf('shared')).toBe(indexed)
+    expect(view.threadsOf('missing')).toEqual([])
+  }
+  expect(read).toHaveBeenCalledTimes(5)
+  read.mockReturnValue([])
+  expect(snapshot(host).threadsOf('shared')).toEqual([])
+  if (process.env.DSH_PERF_OUTPUT) writeFileSync(process.env.DSH_PERF_OUTPUT, JSON.stringify({ samplesMs: samples, medianMs: samples.slice().sort((a, b) => a - b)[2] }))
 })
