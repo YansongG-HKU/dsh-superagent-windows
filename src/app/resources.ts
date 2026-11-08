@@ -1,5 +1,5 @@
 /** Serves paginated context resources to orchestrator_read so large bodies stay out of model prompts until requested. */
-import type { SessionId } from '@deepseek-ai/dsh-session'
+import type { SessionId, SessionEvent } from '@deepseek-ai/dsh-session'
 import { UserError, key, latestReport, reached, runningAssignment, threadKey, type Ticket, type Trigger } from '../core/index.ts'
 import { batchOf, inputMessage, triggerMessage, workerSessionId } from '../executor/dsh.ts'
 import { readGithub } from '../sources/github-read.ts'
@@ -114,8 +114,7 @@ const triggerLine = (trigger: Trigger) => ({ trigger_id: trigger.id, actor: trig
 async function transcript(host: ResourceHost, ticketId: string) {
   // DSH 0.2.2 removed SessionController.inspect(); read a passive event page instead.
   const controller = host.context.sessionController as unknown as {
-    events: (request: { address: { kind: 'session'; sessionId: string }; maxMessages?: number }, signal: AbortSignal) =>
-      Promise<{ records: readonly { type: string; event: unknown }[] }>
+    events(request: { address: { kind: 'session'; sessionId: string }; maxMessages?: number }, signal: AbortSignal): Promise<{ records: readonly { type: string; event: SessionEvent }[] }>
   }
   const page = await controller.events({ address: { kind: 'session', sessionId: workerSessionId(ticketId) }, maxMessages: 1000 }, new AbortController().signal)
   return page.records.filter(record => record.type === 'event').map(record => record.event)

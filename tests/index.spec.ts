@@ -5,6 +5,7 @@ import { apply } from '../src/index.ts'
 // Stub Runtime to capture the resolved Machine settings and restart callback.
 const runtimes = vi.hoisted(() => [] as { machine: Machine; restart: () => void }[])
 vi.mock('../src/app/runtime.ts', () => ({ Runtime: class {
+  static async create(ctx: unknown, machine: Machine, restart: () => void) { return new this(ctx, machine, restart) }
   ready = Promise.resolve()
   constructor(_ctx: unknown, readonly machine: Machine, readonly restart: () => void) { runtimes.push(this) }
   configured() { return true }

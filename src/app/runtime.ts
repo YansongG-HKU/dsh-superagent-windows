@@ -1,5 +1,6 @@
 /** Application composition root and lifecycle manager for dsh-superagent. */
 import { Service, type Context } from '@deepseek-ai/cordis'
+import { acquireStateLock } from './state-lock.ts'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-api-session-controller'
@@ -10,10 +11,8 @@ import type {} from '@deepseek-ai/dsh-system-prompt'
 import type {} from '@deepseek-ai/dsh-tools'
 import type {} from '@deepseek-ai/dsh-skill'
 import type {} from '@deepseek-ai/dsh-subprocess'
-import { mkdirSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { lockSync } from 'proper-lockfile'
 import { Engine, key, reasonText, type EngineForSettings, type ReceiveResult, type Ticket, type Trigger } from '../core/index.ts'
 import { allowedSender, settingsPolicy } from '../policy.ts'
 import { SourceRegistry } from '../sources/registry.ts'
@@ -60,6 +59,18 @@ const now = (): string => new Date().toISOString()
  * Locks the state directory before opening SQLite so concurrent processes cannot corrupt or double-migrate state.
  */
 export class Runtime extends Service implements SourceHost {
+  /** Acquire storage ownership before registering services or opening SQLite. */
+  static async create(ctx: Context, machine: Machine, restart: () => void, options: { signal?: AbortSignal; onWait?: () => void; timeoutMs?: number } = {}): Promise<Runtime> {
+    let runtime: Runtime | undefined
+    const release = await acquireStateLock(machine.stateDir, {
+      signal: options.signal ?? new AbortController().signal,
+      ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
+      ...(options.onWait ? { onWait: options.onWait } : {}),
+      onCompromised: error => runtime?.lockCompromised(error),
+    })
+    try { runtime = new Runtime(ctx, machine, restart, release); return runtime }
+    catch (error) { await release(); throw error }
+  }
   readonly store: Store
   readonly setup: Setup
   readonly prompts: Prompts
@@ -89,7 +100,7 @@ export class Runtime extends Service implements SourceHost {
   private readonly toolHost: MainToolsHost & ExecutorToolsHost
   /** Non-zero while a main-Session tool is executing an Engine command, suppressing self-triggered domain event notices. */
   private quiet = 0
-  constructor(ctx: Context, readonly machine: Machine, restart: () => void) {
+  private constructor(ctx: Context, readonly machine: Machine, restart: () => void, release: () => Promise<void>) {
     super(ctx, 'orchestrator')
     const runtime = this
     // The cluster page reads tools/cluster.mjs's own configuration (DSH home by default) and runs that tool for its actions.
@@ -97,10 +108,7 @@ export class Runtime extends Service implements SourceHost {
       configPath: process.env.DSH_SUPERAGENT_CLUSTER_CONFIG
         ?? join(process.env.DSH_HOME ?? join(homedir(), '.dsh'), 'superagent-cluster.json') })
     // Lock the state directory before opening the database so another process cannot migrate or write concurrently.
-    mkdirSync(machine.stateDir, { recursive: true, mode: 0o700 })
-    const compromised = (error: Error) => { this.runtimeHealth.set({ state: 'error', detail: error.message }); this.stopped.abort() }
-    const release = lockSync(machine.stateDir, { stale: 30_000, onCompromised: compromised })
-    this.releaseLock = async () => { release() }
+    this.releaseLock = release
     let opened: Store | undefined
     try {
       const report = (error: unknown) => { ctx.logger.warn('dsh-superagent: %s', String(error)) }
@@ -175,11 +183,12 @@ export class Runtime extends Service implements SourceHost {
       this.ready = this.initialize()
     } catch (error) {
       // Release the database and state lock if initialization fails so an in-process restart can reacquire them.
-      try { opened?.close() } finally { release() }
+      opened?.close()
       throw error
     }
   }
   get health(): Readonly<Record<string, Health>> { return this.board.all }
+  lockCompromised(error: Error): void { this.runtimeHealth.set({ state: 'error', detail: error.message }); this.stopped.abort(error) }
   /** Aborted when dsh-superagent stops or loses its state directory lock, cancelling running reads and subprocesses. */
   get lifetime(): AbortSignal { return this.stopped.signal }
   context(kind: { kind: string; health: readonly string[] }): SourceContext { return sourceContextOf(this.sourceDeps, kind) }
