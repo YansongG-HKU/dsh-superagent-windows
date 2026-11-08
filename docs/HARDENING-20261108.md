@@ -9,3 +9,5 @@ Five dedicated tests cover delayed owner release, active-owner deadline, cancell
 Validation: typecheck and build passed; full suite 1196 passed, 33 skipped (62 passing files, one skipped file).
 
 The fifth lock test starts a real child process, waits until it owns the lease, terminates it abnormally, and verifies recovery after the unchanged 30-second stale threshold (31.67 seconds for the lock test file locally). It uses an isolated temporary directory and never kills the desktop or touches user SQLite state. The final full suite, typecheck and build all pass.
+
+后续性能复查与测量见 [PERFORMANCE-20261108.md](PERFORMANCE-20261108.md)。
