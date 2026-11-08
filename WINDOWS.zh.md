@@ -167,15 +167,18 @@ Windows 上的后台启停不是 Windows 服务：机器重启后需要再执行
 
 ## 在桌面版 DSH 里运行的行为
 
-插件像其他 profile 插件一样运行在桌面应用的 Node 进程里。原型的设计假定独立 DSH profile，因为它会**改进程环境**
-让 worker shell 以 agent 身份工作：`GH_CONFIG_DIR`、`GIT_CONFIG_GLOBAL`（隔离的 `worker-gitconfig`，没有提交身份，
-带 agent 的凭据助手）、`PATH`（worker shim）以及凭据类变量墓碑。在桌面应用里这些变量是进程级的，所以插件启用期间
-**该 DSH 进程的所有会话**都会看到它们：
+插件像其他 profile 插件一样运行在桌面应用的 Node 进程里。它**不会**把 worker 环境写进 `process.env`：`GH_CONFIG_DIR`、
+`GIT_CONFIG_GLOBAL`（隔离的 `worker-gitconfig`，没有提交身份，带 agent 的凭据助手）、`PATH` 上的 worker shim 以及
+凭据类变量墓碑，只挂到属于 worker 会话的子进程请求上，以及插件自己的 worker 命令上：
 
-- 任何 DSH 会话里的 `gh` 都以 agent 账号动作；`git` 使用 agent 的凭据助手，并且没有显式身份时拒绝提交。
+- worker 会话里的 `gh` 和 `git` 以 agent 身份工作：`git` 使用 agent 的凭据助手，没有显式身份时拒绝提交。
+- 同一个宿主进程里的其他会话、以及你自己的工具，保持各自的 git 与 GitHub 身份。
 
-个人 `git`/`gh` 操作请用普通终端；不需要时停用插件；或者改用独立 profile/进程部署（上游推荐布局；
-`tools/dev-profile.ps1` 可启动一个到 `127.0.0.1:3082`）。插件停用后环境会恢复。
+归因规则：子进程的发起 Agent 是 worker 会话（`worker-<ticketId>`），或其工作目录是工单工作区，才算 worker 的子进程。
+归因刻意保守：归不到 worker 的请求保留宿主环境，避免宿主误用 agent 身份。
+
+独立 profile 仍建议用于隔离，也因为一个实例只轮询一个仓库，但不再因为环境原因而必需。
+`tools/dev-profile.ps1` 可在 `127.0.0.1:3082` 启动一个独立实例。
 
 ## 已知限制
 

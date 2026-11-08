@@ -202,18 +202,22 @@ a scheduled task that runs it at logon).
 
 ## How it behaves inside the DSH Desktop app
 
-The plugin runs inside the desktop app's Node process, exactly like any other profile plugin. The prototype's
-design assumes a dedicated DSH profile because it **mutates process environment** so worker shells act as the
-agent: `GH_CONFIG_DIR`, `GIT_CONFIG_GLOBAL` (an isolated `worker-gitconfig` with no commit identity and the
-agent's credential helper), `PATH` (worker shims) and credential-shaped tombstones. Inside the desktop app those
-variables are process-wide, so **every session of that DSH process** sees them while the plugin is active:
+The plugin runs inside the desktop app's Node process, exactly like any other profile plugin. It does **not**
+write the worker environment into `process.env`. Those values — `GH_CONFIG_DIR`, `GIT_CONFIG_GLOBAL` (an isolated
+`worker-gitconfig` with no commit identity and the agent's credential helper), the worker shims on `PATH` and the
+credential-shaped tombstones — are attached only to the subprocess requests that belong to a worker Session, along
+with the plugin's own worker commands:
 
-- `gh` in any DSH session acts as the agent account; `git` uses the agent's credential helper and refuses to
-  commit without an explicit identity.
+- `gh` and `git` inside a worker Session act as the agent account: `git` uses the agent's credential helper and
+  refuses to commit without an explicit identity.
+- Every other Session of the same host process, and the operator's own tools, keep their own git and GitHub identity.
 
-Use a normal terminal for personal `git`/`gh` work, disable the plugin when you do not need it, or deploy it in a
-dedicated profile/process instead (upstream's recommended layout; `tools/dev-profile.ps1` starts one on
-`127.0.0.1:3082`). The environment is restored when the plugin is disabled.
+A spawn belongs to a worker when its initiating Agent is a worker Session (`worker-<ticketId>`) or its working
+directory is a ticket workspace. The attribution is conservative on purpose: a spawn that cannot be attributed to a
+worker keeps the host environment, so the host never acts as the agent by accident.
+
+A dedicated profile is still recommended for isolation and because one instance polls one repository, but it is no
+longer needed for environment reasons. `tools/dev-profile.ps1` starts a dedicated instance on `127.0.0.1:3082`.
 
 ## Known limitations
 

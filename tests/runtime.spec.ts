@@ -96,6 +96,11 @@ const subprocess = { spawn: vi.fn((spec: { argv: readonly string[] }) => {
   const reader = (text: string) => ({ readFrom: () => ({ text, nextOffset: text.length, lossy: false }) })
   return { done: Promise.resolve({ exitCode: answer instanceof Error ? 1 : 0, signal: null }), collected: { stdout: reader(answer instanceof Error ? '' : answer), stderr: reader(answer instanceof Error ? answer.message : '') } }
 }) }
+/** The fixture's spawn mock: Runtime wraps `subprocess.spawn` to scope the worker environment, so assertions read this stable reference. */
+const spawnMock = subprocess.spawn
+/** Host process variables worker setup must never write into; the host keeps its own git and GitHub identity. */
+const HOST_ENVIRONMENT = ['GIT_CONFIG_GLOBAL', 'GIT_CONFIG_NOSYSTEM', 'GH_CONFIG_DIR', 'GIT_AUTHOR_NAME', 'GIT_COMMITTER_NAME', 'PATH'] as const
+const hostEnvironment = (): Record<string, string | undefined> => Object.fromEntries(HOST_ENVIRONMENT.map(name => [name, process.env[name]]))
 /** Source account overrides for test setup; `feishu: null` disables the Feishu source. */
 interface Accounts { github?: Record<string, unknown>; feishu?: Record<string, unknown> | null }
 function seed(store: Store, accounts: Accounts = {}): void {
@@ -853,7 +858,7 @@ it('reports each setup problem where the operator fixes it, and checks the agent
   await needs('github', 'repositoryReadOnly', { account: 'agent-bot', repository: 'acme/widgets' })
   answers[`${AGENT()} api repos/acme/widgets --jq {name: .full_name, push: .permissions.push}`] = '{"name":"acme/widgets","push":true}\n'
   // The agent CLI runs in the workers' environment: without the shims on PATH.
-  const check = subprocess.spawn.mock.calls.map(([spec]) => spec as { argv: string[]; env?: Record<string, string> }).find(spec => spec.argv.includes(AGENT()))!
+  const check = spawnMock.mock.calls.map(([spec]) => spec as { argv: string[]; env?: Record<string, string> }).find(spec => spec.argv.includes(AGENT()))!
   if (WINDOWS) {
     // Windows has no `env` command: the probe runs the CLI directly with the isolated gh configuration directory in its environment.
     expect(check.argv[0]).toBe(AGENT())
@@ -966,7 +971,8 @@ it('pauses and resumes processing as its own action, a setting outside every blo
 
 /** The credential-helper line `writeEnvironment` writes: git's config parser needs the quotes inside the helper escaped. */
 const writtenHelper = (cli: string): string => `"${credentialHelper(cli).replace(/[\\"]/g, char => `\\${char}`)}"`
-it('runs setup again while the Feishu bot check failed, and restores the process environment when git fails its check', async () => {
+it('runs setup again while the Feishu bot check failed, and leaves the host process environment untouched when git fails its check', async () => {
+  const host = hostEnvironment()
   answers[`${BOT()} config strict-mode`] = 'strict-mode: off (source: profile)'
   const next = await restart()
   await next.ready
@@ -978,11 +984,12 @@ it('runs setup again while the Feishu bot check failed, and restores the process
   const broken = await restart()
   await broken.ready
   expect(broken.setupProblem).toMatchObject({ place: 'deployment', code: 'gitTooOld' })
-  expect(process.env.GIT_CONFIG_GLOBAL).toBeUndefined()
-  expect(process.env.PATH?.split(delimiter)).not.toContain(join(directory, 'worker-bin'))
+  // A failed check is the case most likely to leave something behind: the host environment must still be the caller's own.
+  expect(hostEnvironment()).toEqual(host)
 })
 
-it('writes worker shims and the agent environment from the configuration only, and restores the environment on stop', async () => {
+it('writes worker shims and the agent environment from the configuration only, and leaves the host environment alone', async () => {
+  const host = hostEnvironment()
   const bin = join(directory, 'worker-bin')
   // Only POSIX shims gh and lark-cli: Windows runs the real gh with GH_CONFIG_DIR, and has no Feishu bot to shim.
   expect(readdirSync(bin).sort()).toEqual(WINDOWS ? [] : ['gh', 'lark-cli'])
@@ -997,12 +1004,24 @@ it('writes worker shims and the agent environment from the configuration only, a
     expect(readFileSync(join(bin, 'gh'), 'utf8')).toContain(`exec '${AGENT()}'`)
   }
   expect(readFileSync(workerGitConfig(directory), 'utf8')).toContain(`[credential "https://github.com"]\n\thelper = ${writtenHelper(AGENT())}`)
-  expect(process.env).toMatchObject({ GIT_CONFIG_GLOBAL: workerGitConfig(directory), GIT_CONFIG_NOSYSTEM: '1', ...WINDOWS ? { GH_CONFIG_DIR: join(directory, 'gh-agent') } : {} })
-  expect(process.env.GIT_AUTHOR_NAME).toBeUndefined()
-  expect(process.env.PATH?.split(delimiter)[0]).toBe(bin)
+  // Workers get these as explicit subprocess environment; the host process keeps whatever it started with.
+  expect(hostEnvironment()).toEqual(host)
   await next.stop()
-  expect(process.env.GIT_CONFIG_GLOBAL).toBeUndefined()
-  expect(process.env.PATH?.split(delimiter)).not.toContain(bin)
+  expect(hostEnvironment()).toEqual(host)
+})
+
+it('never writes the worker git and GitHub variables into the host process environment', async () => {
+  const names = ['GIT_CONFIG_GLOBAL', 'GIT_CONFIG_NOSYSTEM', 'GH_CONFIG_DIR'] as const
+  const before = Object.fromEntries(names.map(name => [name, process.env[name]]))
+  const during = async (): Promise<Record<string, string | undefined>> => Object.fromEntries(names.map(name => [name, process.env[name]]))
+  // Before setup runs, after it resolved, and after the plugin stopped: the three variables must never change in this process.
+  expect(await during()).toEqual(before)
+  const next = await restart()
+  await next.ready
+  expect(next.configured()).toBe(true)
+  expect(await during()).toEqual(before)
+  await next.stop()
+  expect(await during()).toEqual(before)
 })
 
 it('waits for setup when the shim directory holds a file dsh-superagent did not write, and leaves the file alone', async () => {
@@ -1094,7 +1113,7 @@ it('leaves auto-merge to the delivery requirements, with the agent\'s own gh and
 
 it('runs the prepare command once for a new ticket, under the execution root with the ticket\'s environment, and fails the ticket with its output', async () => {
   const prepare = (command: string) => runtime.store.saveSettings({ ...runtime.store.settings(), executor: { ...runtime.store.settings().executor, prepare: command } })
-  const runs = () => subprocess.spawn.mock.calls.map(([spec]) => spec as { argv: string[]; cwd: string; env?: Record<string, string> }).filter(spec => isPrepareSpawn(spec.argv))
+  const runs = () => spawnMock.mock.calls.map(([spec]) => spec as { argv: string[]; cwd: string; env?: Record<string, string> }).filter(spec => isPrepareSpawn(spec.argv))
   prepare('git -C /srv/widgets worktree add "$DSH_SUPERAGENT_DIR" -b "agent/$DSH_SUPERAGENT_NAME"')
   const { ticket } = await acceptedTicket()
   expect(runs()).toEqual([expect.objectContaining({ argv: prepareSpawn('git -C /srv/widgets worktree add "$DSH_SUPERAGENT_DIR" -b "agent/$DSH_SUPERAGENT_NAME"'), cwd: join(directory, 'work'),
@@ -1119,10 +1138,10 @@ it('counts a ticket whose directory the host prepared before prepare commands ex
   const stored = runtime.store.tickets.get(ticket.id)!
   runtime.store.tickets.save({ ...stored, execution: { ...stored.execution!, directory } })
   runtime.store.saveSettings({ ...runtime.store.settings(), executor: { ...runtime.store.settings().executor, prepare: 'exit 1' } })
-  subprocess.spawn.mockClear()
+  spawnMock.mockClear()
   await runtime.engine.retryTicket(ticket.id)
   await runtime.idle()
-  expect(subprocess.spawn.mock.calls.some(([spec]) => isPrepareSpawn(spec.argv))).toBe(false)
+  expect(spawnMock.mock.calls.some(([spec]) => isPrepareSpawn(spec.argv))).toBe(false)
   expect(runtime.store.tickets.get(ticket.id)!.assignments.at(-1)!.state).toBe('running')
 })
 
@@ -1613,7 +1632,7 @@ it('runs a launch that fails for a passing reason again on the launch backoff th
     controller.resolveAgent.mockImplementation(original)
   }
   // A prepare command whose output names a passing failure is not run again on its own.
-  const runs = () => subprocess.spawn.mock.calls.filter(([spec]) => isPrepareSpawn((spec as { argv: string[] }).argv)).length
+  const runs = () => spawnMock.mock.calls.filter(([spec]) => isPrepareSpawn((spec as { argv: string[] }).argv)).length
   runtime.store.saveSettings({ ...runtime.store.settings(), executor: { ...runtime.store.settings().executor, prepare: 'exit 3' } })
   answers['sh -c exit 3'] = new Error('fatal: unable to access: The requested URL returned error: 503')
   const before = runs()

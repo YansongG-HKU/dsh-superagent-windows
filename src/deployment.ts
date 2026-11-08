@@ -6,7 +6,7 @@ import type { Volatile } from '@deepseek-ai/cordis'
 import s from '@deepseek-ai/schemastery'
 import { z } from 'zod'
 import type { SubprocessRuntime } from '@deepseek-ai/dsh-subprocess'
-import { runAsWorker, sameDirectory, withoutDirectory, agentGhConfig, workerBin } from './infra/environment.ts'
+import { runAsWorker, sameDirectory, withoutDirectory, agentGhConfig, workerBin, workerEnvironment } from './infra/environment.ts'
 import { SetupError } from './setup.ts'
 
 /** True on the Windows host this plugin runs on, where command names resolve through PATHEXT instead of an executable bit. */
@@ -101,10 +101,11 @@ export type Probe = (argv: string[], env?: Record<string, string>) => Promise<st
  */
 export function workerProbe(subprocess: SubprocessRuntime, stateDir: string, cwd: string, signal: AbortSignal): Probe {
   const path = withoutDirectory(process.env.PATH ?? '', workerBin(stateDir))
+  const environment = workerEnvironment(stateDir)
   const deadline = (): AbortSignal => AbortSignal.any([signal, AbortSignal.timeout(60_000)])
   return (argv, env) => WINDOWS
-    ? runAsWorker(subprocess, argv, cwd, deadline(), { PATH: path, GH_CONFIG_DIR: agentGhConfig(stateDir), ...env })
-    : runAsWorker(subprocess, ['env', `PATH=${path}`, ...Object.entries(env ?? {}).map(([name, value]) => `${name}=${value}`), ...argv], cwd, deadline())
+    ? runAsWorker(subprocess, argv, cwd, deadline(), environment, { PATH: path, GH_CONFIG_DIR: agentGhConfig(stateDir), ...env })
+    : runAsWorker(subprocess, ['env', `PATH=${path}`, ...Object.entries(env ?? {}).map(([name, value]) => `${name}=${value}`), ...argv], cwd, deadline(), environment)
 }
 
 const GithubUser = z.object({ login: z.string().regex(/^[A-Za-z0-9-]+$/), id: z.number().int().positive() })

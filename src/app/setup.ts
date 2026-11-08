@@ -2,7 +2,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { UserError } from '../core/index.ts'
 import { SETUP_FIELDS, resolveDeployment, resolveFeishuBot, workerProbe, type Deployment, type Machine } from '../deployment.ts'
-import { agentVariables, applyEnvironment, verifyEnvironment, withoutDirectory, workerBin, writeEnvironment } from '../infra/environment.ts'
+import { agentVariables, verifyEnvironment, withoutDirectory, workerBin, writeEnvironment } from '../infra/environment.ts'
 import type { Settings, SettingsBlock } from '../policy.ts'
 import { SetupError, type SetupProblem } from '../setup.ts'
 
@@ -18,8 +18,9 @@ const setupFields = (settings: Settings) =>
 export const setupChanged = (before: Settings, after: Settings): boolean => setupFields(before) !== setupFields(after)
 
 /**
- * Resolves the target repository, GitHub account, and optional Feishu bot by probing CLIs, then writes and applies the isolated git and shim environment used by worker processes.
+ * Resolves the target repository, GitHub account, and optional Feishu bot by probing CLIs, then writes the isolated git and shim environment used by worker processes.
  * `Runtime` runs it at startup to gate orchestration readiness, while `Settings` uses it to validate account changes, update blocked command shims, and schedule restarts.
+ * Setup never writes that environment into `process.env`: the values reach only the subprocesses that need them (see `workerEnvironment` and `scopeWorkerShells`).
  */
 export class Setup {
   private resolved?: Deployment
@@ -29,7 +30,6 @@ export class Setup {
   private readonly path: string
   /** Environment variables pointing agent subprocesses at the isolated git config and command shims. */
   private readonly variables: Record<string, string | undefined>
-  private restoreEnvironment?: () => void
   constructor(private readonly host: SetupHost) {
     this.path = withoutDirectory(process.env.PATH ?? '', workerBin(host.machine.stateDir))
     this.variables = agentVariables(host.machine.stateDir)
@@ -67,7 +67,6 @@ export class Setup {
   async blockCommands(blocked: readonly string[]): Promise<void> {
     if (this.resolved) await writeEnvironment(this.resolved, blocked)
   }
-  restore(): void { this.restoreEnvironment?.(); this.restoreEnvironment = undefined }
   /** Probes CLIs the way worker shells run them, using `stateDir` as `cwd` since it exists even before the repository clone is valid. */
   private probe() {
     const { context, machine, lifetime } = this.host
@@ -89,9 +88,9 @@ export class Setup {
       throw new SetupError('environmentFailed', { output: error instanceof Error ? error.message : String(error) })
     }
     await writeEnvironment(resolved, settings.executor.blockedCommands).catch(machineProblem)
-    this.restoreEnvironment = applyEnvironment(this.variables, machine.stateDir, this.path)
+    // The worker environment is handed to the children that need it (`workerEnvironment`), never applied to `process.env`,
+    // so the host process and every other Session of this DSH instance keep their own git and GitHub identity.
     await verifyEnvironment(resolved, context.subprocess, lifetime).catch((error: unknown) => {
-      this.restore()
       machineProblem(error)
     })
     return resolved

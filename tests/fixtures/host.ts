@@ -162,7 +162,7 @@ export async function startRuntime(seed?: (store: Store) => void) {
   }
   /** A prepare command waits for this while it is set. */
   const hooks: { prepare?: Promise<void> } = {}
-  const subprocess = { spawn: vi.fn((spec: { argv: readonly string[] }) => {
+  const spawnMock = vi.fn((spec: { argv: readonly string[] }) => {
     const argv = [...spec.argv]
     while (argv[0] === 'env' || /^[A-Z_]+=/.test(argv[0] ?? '')) argv.shift()
     const prepare = isPrepareSpawn(argv)
@@ -170,7 +170,9 @@ export async function startRuntime(seed?: (store: Store) => void) {
     const exited = { exitCode: 0, signal: null }
     const done = prepare && hooks.prepare ? hooks.prepare.then(() => exited) : Promise.resolve(exited)
     return { done, collected: { stdout: reader(answers[prepare ? prepareAnswerKey(argv) : argv.join(' ')] ?? ''), stderr: reader('') } }
-  }) }
+  })
+  // Runtime routes worker spawns through its own wrapper, so callers assert against this stable mock instead of `subprocess.spawn`.
+  const subprocess = { spawn: spawnMock }
   const agents = new Map<string, FakeAgent>()
   /** Each Session's next step, which takes the messages that wait for one. */
   const steps = new Map<string, () => void>(), claims = new Map<string, () => void>()
@@ -305,7 +307,7 @@ export async function startRuntime(seed?: (store: Store) => void) {
   const step = (sessionId: string) => { steps.get(sessionId)!() }
   /** A step of the worker claims what waits for it, and is cut off before the Session took it. */
   const claim = (sessionId: string) => { claims.get(sessionId)!() }
-  return { runtime, ctx, directory, agents, tools, deliveries, relays, candidates, runTool, route, acceptedTicket, api, controller, subprocess, hooks, resolveDefault, stop,
+  return { runtime, ctx, directory, agents, tools, deliveries, relays, candidates, runTool, route, acceptedTicket, api, controller, subprocess, spawnMock, hooks, resolveDefault, stop,
     jobs, subagents, step, claim }
 }
 export type Host = Awaited<ReturnType<typeof startRuntime>>

@@ -19,7 +19,7 @@ import { SourceRegistry } from '../sources/registry.ts'
 import { Commands } from '../infra/commands.ts'
 import { packagePath } from '../infra/paths.ts'
 import type { Deployment, Machine } from '../deployment.ts'
-import { environmentOf, ticketEnvironment, type Variable } from './execution-environment.ts'
+import { environmentOf, executionRoot, ticketEnvironment, type Variable } from './execution-environment.ts'
 import type { SetupProblem } from '../setup.ts'
 import { DshExecutor, sourceTrigger, triggerMessage, workerSessionId } from '../executor/dsh.ts'
 import { ticketCard } from './cards.ts'
@@ -45,6 +45,7 @@ import { health, type Health, type SourceContext, type SourceHost } from '../sou
 import { Sessions } from './sessions.ts'
 import { Settings } from './settings.ts'
 import { sourceContextOf, type SourceContextDeps } from './source-context.ts'
+import { scopeWorkerShells } from '../infra/worker-shells.ts'
 import type { ResourceHost } from './resources.ts'
 import { mainTools, type MainToolsHost } from './tools/main.ts'
 import { executorTools, type ExecutorToolsHost } from './tools/executor.ts'
@@ -114,6 +115,10 @@ export class Runtime extends Service implements SourceHost {
       const report = (error: unknown) => { ctx.logger.warn('dsh-superagent: %s', String(error)) }
       const store = opened = this.store = new Store(join(machine.stateDir, 'orchestrator.sqlite'), report)
       const setup = this.setup = new Setup({ context: ctx, machine, lifetime: this.lifetime, restart })
+      // A worker is an in-process Session, so its shell tools spawn through the shared subprocess service. Scope the worker
+      // environment to those spawns instead of writing it into `process.env`, where every other Session would inherit it.
+      this.disposers.push(scopeWorkerShells({ context: ctx, stateDir: machine.stateDir,
+        executionRoot: () => executionRoot(store.settings(), machine.stateDir) }))
       const deployed = () => setup.configured()
         ? environmentOf({ deployment: setup.deployment, sources: this.sources, settings: store.settings() }) : undefined
       const feishu = () => setup.configured() && !!setup.deployment.feishu
@@ -261,7 +266,6 @@ export class Runtime extends Service implements SourceHost {
       await this.ctx.sessionPersistence.flush()
     } finally {
       // Close the database before releasing the directory lock so another process cannot open the database mid-write; a compromised lock may already be released.
-      this.setup.restore()
       try { this.store.close() } finally {
         const unreleased = (error: unknown) => { this.ctx.logger.warn('dsh-superagent could not release its state directory lock: %s',
           String(error)) }

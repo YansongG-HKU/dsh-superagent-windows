@@ -144,18 +144,20 @@ export async function writeEnvironment(deployment: Pick<Deployment, 'stateDir' |
   ].join('\n') + '\n')
 }
 
-/** Applies environment overrides and prepends worker shims to `process.env.PATH`, returning a restore callback. */
-export function applyEnvironment(variables: Record<string, string | undefined>, stateDir: string, path: string): () => void {
-  const values = { ...variables, PATH: [workerBin(stateDir), path].join(delimiter) }
-  const previous = Object.fromEntries(Object.keys(values).map(name => [name, process.env[name]]))
-  const apply = (env: Record<string, string | undefined>): void => { for (const [name, value] of Object.entries(env)) { if (value === undefined) delete process.env[name]; else process.env[name] = value } }
-  apply(values)
-  return () => { apply(previous) }
+/**
+ * The environment worker processes run with: agent variables, their tombstones, and the worker shim directory first on PATH.
+ * Returned as a value instead of applied to `process.env` so the host process keeps its own environment and only the
+ * children that need the worker identity receive it.
+ */
+export function workerEnvironment(stateDir: string, path = process.env.PATH ?? ''): Record<string, string | undefined> {
+  return { ...agentVariables(stateDir), PATH: [workerBin(stateDir), withoutDirectory(path, workerBin(stateDir))].join(delimiter) }
 }
 
-/** Spawns a command through the DSH subprocess runtime, which strips credential-shaped environment variables. */
-export async function runAsWorker(subprocess: SubprocessRuntime, argv: string[], cwd: string, signal: AbortSignal, env?: Record<string, string>): Promise<string> {
-  const handle = subprocess.spawn({ argv, cwd, graceMs: 2000, signal, ...env ? { env } : {}, stdio: { stdin: 'ignore', stdout: { maxBytes: 1 << 20 }, stderr: { maxBytes: 1 << 16 } } })
+/** Spawns a command through the DSH subprocess runtime, which strips credential-shaped environment variables, with the caller's explicit worker environment. */
+export async function runAsWorker(subprocess: SubprocessRuntime, argv: string[], cwd: string, signal: AbortSignal,
+  environment: Record<string, string | undefined> = {}, extra: Record<string, string> = {}): Promise<string> {
+  const env = { ...environment, ...extra }
+  const handle = subprocess.spawn({ argv, cwd, graceMs: 2000, signal, ...Object.keys(env).length ? { env } : {}, stdio: { stdin: 'ignore', stdout: { maxBytes: 1 << 20 }, stderr: { maxBytes: 1 << 16 } } })
   const { exitCode } = await handle.done
   const read = (reader: SubprocessOutputReader | undefined): string => reader?.readFrom(0).text ?? ''
   if (exitCode === 0) return read(handle.collected.stdout)
@@ -172,7 +174,8 @@ const configPath = (path: string): string => WINDOWS ? path.replaceAll('\\', '/'
 export async function verifyEnvironment(deployment: Pick<Deployment, 'github' | 'stateDir'>, subprocess: SubprocessRuntime, signal: AbortSignal): Promise<void> {
   const { github, stateDir } = deployment
   // `-z` separates fields with NUL and never quotes paths.
-  const fields = (await runAsWorker(subprocess, ['git', 'config', '-z', '--show-origin', '--get-all', 'credential.https://github.com.helper'], stateDir, AbortSignal.any([signal, AbortSignal.timeout(60_000)])).catch(() => '')).split('\0')
+  const fields = (await runAsWorker(subprocess, ['git', 'config', '-z', '--show-origin', '--get-all', 'credential.https://github.com.helper'], stateDir,
+    AbortSignal.any([signal, AbortSignal.timeout(60_000)]), workerEnvironment(stateDir)).catch(() => '')).split('\0')
   // One setting is a pair of origin file and value, followed by the final empty field.
   fields.pop()
   const ours = fields.length === 2 && configPath(originPath(fields[0]!)) === configPath(workerGitConfig(stateDir)) && fields[1] === credentialHelper(github.cli)
@@ -183,10 +186,11 @@ export async function verifyEnvironment(deployment: Pick<Deployment, 'github' | 
  * Verifies that a ticket directory's local or worktree git config defines no custom `credential.*` or `http.*extraheader`
  * keys, which the agent's git would read from the repository's own config and act on.
  */
-export async function verifyDirectory(directory: string, subprocess: SubprocessRuntime, signal: AbortSignal): Promise<void> {
+export async function verifyDirectory(directory: string, subprocess: SubprocessRuntime, signal: AbortSignal,
+  environment: Record<string, string | undefined> = {}): Promise<void> {
   const keys = ['git', 'config', '-z', '--show-scope', '--get-regexp', '^(credential\\..*|http\\..*extraheader)$']
   // `git config --get-regexp` exits with code 1 when no keys match.
-  const output = await runAsWorker(subprocess, keys, directory, AbortSignal.any([signal, AbortSignal.timeout(60_000)]))
+  const output = await runAsWorker(subprocess, keys, directory, AbortSignal.any([signal, AbortSignal.timeout(60_000)]), environment)
     .catch((error: unknown) => { if (error instanceof CliError && error.exitCode === 1) return ''; throw error })
   const scoped = output.split('\0')
   const local = scoped.flatMap((scope, index) => index % 2 === 0 && (scope === 'local' || scope === 'worktree') ? [scoped[index + 1]!.split('\n')[0]!] : [])
