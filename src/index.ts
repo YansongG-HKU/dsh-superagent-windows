@@ -18,8 +18,14 @@ export async function apply(ctx: Context, config: DeploymentConfig): Promise<voi
   const restart = (): void => {
     ctx.fiber.restart().then(() => { ctx.get('settings')?.describe() }).catch((error: unknown) => { ctx.logger.error('dsh-superagent restart failed: %s', String(error)) })
   }
-  const runtime = new Runtime(ctx, machine, restart)
-  ctx.effect(() => async () => { await runtime.stop() })
+  const cancel = new AbortController()
+  ctx.effect(() => () => cancel.abort())
+  const runtime = await Runtime.create(ctx, machine, restart, {
+    signal: cancel.signal,
+    onWait: () => ctx.logger.info('Superagent is waiting for its state lock (up to 35 seconds)'),
+  })
+  const owned = runtime
+  ctx.effect(() => async () => { await owned.stop() })
   await runtime.ready
   ctx.logger.info(runtime.configured() ? 'dsh-superagent ready; the Superagent sidebar entry opens the management panel' : `dsh-superagent is waiting for setup: ${runtime.setupProblem?.detail ?? ''}`)
 }
