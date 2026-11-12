@@ -14,6 +14,7 @@ import type { Effects } from './effects.ts'
 import type { Variable } from './execution-environment.ts'
 import { RetryHealth } from './retry-health.ts'
 import { initializeRoleModel } from './role-models.ts'
+import type { RoleModel } from '../policy.ts'
 import { bundledSkills } from './skill-files.ts'
 import { SKILL_PREFIX, type PromptVersion, type Prompts } from './prompts.ts'
 import type { Store } from './store.ts'
@@ -96,6 +97,8 @@ export class Sessions {
   /** Decorated agents mapped to their registered disposers and skill scope until the agent is disposed or `Sessions.dispose()` runs. */
   private readonly bindings = new Map<Agent, SessionBinding>()
   private readonly retryHealth = new RetryHealth()
+  /** Configured role models that did not resolve, by role, with the health text that reports them; their Sessions inherit the default model. */
+  private readonly modelFallbacks = new Map<'orchestrator' | 'worker', string>()
   private readonly ctx: Context
   /** Registers ordered `relay` and `notice` effect handlers that deliver to the main Session. */
   constructor(private readonly host: SessionsHost) {
@@ -148,7 +151,17 @@ export class Sessions {
     }
     if ('error' in result) throw result.error
     const settings = this.host.store.settings()
-    await initializeRoleModel(ctx, result.agent, role === 'orchestrator' ? settings.eval.model : settings.executor.model)
+    const model = role === 'orchestrator' ? settings.eval.model : settings.executor.model
+    try {
+      await initializeRoleModel(ctx, result.agent, model)
+      if (this.modelFallbacks.delete(role)) this.updateModelHealth()
+    } catch (error) {
+      // A configured role model that no longer resolves must not keep the plugin from loading: the Session runs under
+      // the profile's default model instead, and the `models` health entry names the setting to repair. An unset role
+      // model cannot fail to resolve, so an error that follows one still propagates.
+      if (!model) throw error
+      this.noteModelFallback(role, model, error)
+    }
     await this.decorate(result.agent)
     ctx.permissionPresets.set(result.agent.session, 'danger-full-access')
     await ctx.sessionController.rename({ sessionId: id as SessionId, title })
@@ -222,9 +235,22 @@ export class Sessions {
   }
   private updateModelHealth(): void {
     const retries = this.retryHealth.list()
-    this.host.health.set(retries.length
-      ? { state: 'error', detail: retries.slice(0, 5).map(item => `${item.sessionId}: ${item.provider} is over its model budget; retried ${item.attempts} times, waiting since ${item.since}; the model and retry policy are unchanged`).join('; ') + (retries.length > 5 ? `; ${retries.length - 5} more Sessions` : ''), at: retries.at(-1)!.lastAt }
+    const waited = retries.slice(0, 5).map(item => `${item.sessionId}: ${item.provider} is over its model budget; retried ${item.attempts} times, waiting since ${item.since}; the model and retry policy are unchanged`)
+    if (retries.length > 5) waited.push(`${retries.length - 5} more Sessions`)
+    const problems = [...this.modelFallbacks.values(), ...waited]
+    this.host.health.set(problems.length
+      ? { state: 'error', detail: problems.join('; '), at: retries.at(-1)?.lastAt ?? new Date().toISOString() }
       : { state: 'ready', detail: 'No managed Session is waiting on a model budget retry' })
+  }
+  /** Report a configured role model that did not resolve while the Session inherits the profile's default model. */
+  private noteModelFallback(role: 'orchestrator' | 'worker', model: RoleModel, error: unknown): void {
+    const detail = error instanceof Error ? error.message : String(error)
+    const block = role === 'orchestrator' ? 'eval' : 'executor'
+    const text = `The ${block} model ${model.provider}/${model.model} is unavailable (${detail}); its Sessions use the profile's default model. Fix the ${block} model setting or leave it empty.`
+    if (this.modelFallbacks.get(role) === text) return
+    this.modelFallbacks.set(role, text)
+    this.ctx.logger.warn('dsh-superagent: %s', text)
+    this.updateModelHealth()
   }
   private ticketOf(agent: Agent): Ticket | undefined {
     const ticketId = ticketOfSession(agent.id)

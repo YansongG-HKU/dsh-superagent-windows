@@ -1,6 +1,14 @@
 # Profile patch template rendered by tools/cluster.mjs for every cluster instance.
-# The renderer fills the port, stateDir and desktopPlatform placeholders.
-# The model section mirrors the DSH Desktop account login; adjust it to your provider if needed.
+# The renderer fills the port, state directory and desktopPlatform placeholders, the model route
+# placeholders, and the `llm-pi-ai` provider block.
+#
+# Model route: a cluster instance (or its `defaults`) may carry a `model` object in
+# ~/.dsh/superagent-cluster.json:
+#   "model": { "provider": "deepseek-account", "model": "deepseek-flash", "reasoningEffort": "max" }
+# Without one, the DeepSeek account sign-in the DSH Desktop app already has is used. A `model` with a
+# `baseURL` also declares that provider as a custom `llm-pi-ai` route (api defaults to
+# openai-completions; headers, apiKeyEnv, contextWindow, reasoningEfforts and compat are optional),
+# which is how a self-deployed OpenAI-compatible endpoint is used. See tools/README.md.
 - id: webserver
   config:
     host: 127.0.0.1
@@ -11,17 +19,12 @@
     desktopPlatform: {{desktopPlatform}}
 - id: llm-deepseek-account
   disabled: false
-# Fallback provider route: `oc-go` with an OpenCode Go key stored in this DSH home.
-- id: llm-pi-ai
-  config:
-    providers:
-      opencode-go:
-        apiKeyEnv: OPENCODE_GO_API_KEY
+{{modelProviders}}
 - id: agent-default-model
   config:
-    provider: deepseek-account
-    model: deepseek-flash
-    reasoningEffort: max
+    provider: {{modelProvider}}
+    model: {{modelModel}}
+{{modelReasoningEffort}}
 - id: dsh-superagent
   config:
     stateDir: '{{stateDir}}'

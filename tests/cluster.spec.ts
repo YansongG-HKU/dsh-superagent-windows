@@ -3,15 +3,18 @@
  * The command surface itself starts real DSH profiles and is exercised by hand against a
  * playground repository; these helpers cover the config/template/path logic deterministically.
  */
+import { readFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { cleanEnv, deriveInstance, expandPath, findWebUrl, nextPort, normalizeRepository, originOf, prepareCommand,
-  renderProfilePatch, renderTemplate } from '../tools/cluster.mjs'
+import { cleanEnv, DEFAULT_MODEL_ROUTE, deriveInstance, expandPath, findWebUrl, modelRouteOf, nextPort, normalizeModelConfig,
+  normalizeRepository, originOf, prepareCommand, renderProfilePatch, renderTemplate, yamlScalar } from '../tools/cluster.mjs'
 
 describe('cluster profile template', () => {
-  const template = ['- id: webserver', '  config:', '    port: {{port}}', '- id: dsh-superagent', '  config:',
-    "    stateDir: '{{stateDir}}'", '- id: deepseek-account', '  config:', '    desktopPlatform: {{desktopPlatform}}'].join('\n')
+  const template = ['- id: webserver', '  config:', '    port: {{port}}', '- id: deepseek-account', '  config:',
+    '    desktopPlatform: {{desktopPlatform}}', '{{modelProviders}}', '- id: agent-default-model', '  config:',
+    '    provider: {{modelProvider}}', '    model: {{modelModel}}', '{{modelReasoningEffort}}', '- id: dsh-superagent', '  config:',
+    "    stateDir: '{{stateDir}}'"].join('\n')
 
   it('renders every placeholder and refuses an unknown one', () => {
     const rendered = renderProfilePatch(template, { port: 3082, stateDir: 'C:\\dsh\\state\\one', platform: 'win32' })
@@ -27,7 +30,92 @@ describe('cluster profile template', () => {
     expect(renderProfilePatch(template, { port: 1, stateDir: '/srv/dsh', platform: 'darwin' })).toContain('desktopPlatform: darwin')
     expect(renderProfilePatch(template, { port: 1, stateDir: '/srv/dsh', platform: 'linux' })).toContain('desktopPlatform: win32')
   })
+
+  it('keeps the DeepSeek Desktop model route by default, as clusters written before the model option render', () => {
+    const rendered = renderProfilePatch(template, { port: 1, stateDir: '/srv/dsh', platform: 'linux' })
+    expect(DEFAULT_MODEL_ROUTE).toEqual({ provider: 'deepseek-account', model: 'deepseek-flash', reasoningEffort: 'max' })
+    expect(rendered).toContain(['- id: agent-default-model', '  config:', '    provider: deepseek-account', '    model: deepseek-flash',
+      '    reasoningEffort: max'].join('\n'))
+    expect(rendered).toContain(['      opencode-go:', '        apiKeyEnv: OPENCODE_GO_API_KEY'].join('\n'))
+  })
 })
+
+describe('cluster model route', () => {
+  it('normalizes an absent model to the DeepSeek Desktop route and requires provider and model otherwise', () => {
+    expect(normalizeModelConfig(undefined)).toEqual(DEFAULT_MODEL_ROUTE)
+    expect(normalizeModelConfig({ provider: 'spark-local', model: 'deepseek-v4.1-flash' })).toEqual({ provider: 'spark-local', model: 'deepseek-v4.1-flash' })
+    expect(normalizeModelConfig({ provider: 'spark-local', model: 'm', reasoningEffort: 'off' }))
+      .toEqual({ provider: 'spark-local', model: 'm', reasoningEffort: 'off' })
+    expect(() => normalizeModelConfig({ model: 'm' })).toThrow(/model\.provider/)
+    expect(() => normalizeModelConfig({ provider: 'p' })).toThrow(/model\.model/)
+    expect(() => normalizeModelConfig({ provider: ' ', model: 'm' })).toThrow(/model\.provider/)
+    expect(() => normalizeModelConfig({ provider: 'p', model: 'm', reasoningEffort: 'extreme' })).toThrow(/reasoningEffort must be one of/)
+    expect(() => normalizeModelConfig({ provider: 'p', model: 'm', extra: true })).toThrow(/unknown field/)
+  })
+
+  it('validates the custom endpoint route and everything only it can carry', () => {
+    expect(() => normalizeModelConfig({ provider: 'p', model: 'm', api: 'openai-completions' })).toThrow(/needs model\.baseURL/)
+    expect(() => normalizeModelConfig({ provider: 'p', model: 'm', baseURL: 'ftp://example.com' })).toThrow(/http\(s\)/)
+    expect(() => normalizeModelConfig({ provider: 'p', model: 'm', baseURL: 'not a url' })).toThrow(/http\(s\)/)
+    expect(() => normalizeModelConfig({ provider: 'p', model: 'm', baseURL: 'http://example/v1', api: 'grpc' })).toThrow(/model\.api/)
+    expect(() => normalizeModelConfig({ provider: 'p', model: 'm', baseURL: 'http://example/v1', apiKeyEnv: 'not a name' })).toThrow(/apiKeyEnv/)
+    expect(() => normalizeModelConfig({ provider: 'p', model: 'm', baseURL: 'http://example/v1', contextWindow: 0 })).toThrow(/contextWindow/)
+    expect(() => normalizeModelConfig({ provider: 'p', model: 'm', baseURL: 'http://example/v1', headers: { 'Bad Header': 'x' } })).toThrow(/header name/)
+    expect(() => normalizeModelConfig({ provider: 'p', model: 'm', baseURL: 'http://example/v1', headers: { Authorization: 'a\nb' } })).toThrow(/single-line/)
+    expect(() => normalizeModelConfig({ provider: 'p', model: 'm', baseURL: 'http://example/v1', reasoningEfforts: {} })).toThrow(/at least one level/)
+    expect(() => normalizeModelConfig({ provider: 'p', model: 'm', baseURL: 'http://example/v1', reasoningEfforts: { ultra: 'ultra' } })).toThrow(/unknown level/)
+    expect(() => normalizeModelConfig({ provider: 'p', model: 'm', baseURL: 'http://example/v1', reasoningEfforts: { low: '' } })).toThrow(/not be empty/)
+    expect(() => normalizeModelConfig({ provider: 'p', model: 'm', baseURL: 'http://example/v1', reasoningEfforts: { off: null } })).toThrow(/beyond "off"/)
+  })
+
+  it('reads an instance route over the cluster defaults field by field', () => {
+    const config = { defaults: { model: { provider: 'spark-local', model: 'one', baseURL: 'http://127.0.0.1:18790/v1', headers: { 'X-A': 'a' } } } }
+    expect(modelRouteOf(config, { name: 'repo', model: { model: 'two', reasoningEffort: 'low' } })).toEqual({
+      provider: 'spark-local', model: 'two', reasoningEffort: 'low', baseURL: 'http://127.0.0.1:18790/v1', headers: { 'X-A': 'a' } })
+    // No model anywhere keeps the default route; an invalid instance model names the instance.
+    expect(modelRouteOf({ defaults: {} }, { name: 'repo' })).toEqual(DEFAULT_MODEL_ROUTE)
+    expect(() => modelRouteOf(config, { name: 'repo', model: { provider: 'p', model: 'm', reasoningEffort: 'nope' } })).toThrow(/instance repo: model\.reasoningEffort/)
+  })
+
+  it('renders a custom llm-pi-ai provider next to the OpenCode Go fallback when the route names an endpoint', () => {
+    const template = readTemplate()
+    const rendered = renderProfilePatch(template, { port: 3082, stateDir: '/srv/dsh', platform: 'linux', model: {
+      provider: 'spark-local', model: 'deepseek-v4.1-flash', reasoningEffort: 'max', baseURL: 'http://127.0.0.1:18790/v1',
+      headers: { Authorization: 'Bearer local-placeholder' }, contextWindow: 1048576,
+      reasoningEfforts: { low: 'low', medium: 'medium', high: 'high', max: 'max' } } })
+    expect(rendered).toContain(['      spark-local:', '        api: openai-completions',
+      '        headers:', '          Authorization: "Bearer local-placeholder"', '        baseURL: "http://127.0.0.1:18790/v1"',
+      '        models:', '          - id: deepseek-v4.1-flash', '            contextWindow: 1048576',
+      '            reasoningEfforts:', '              low: low', '              medium: medium', '              high: high', '              max: max'].join('\n'))
+    expect(rendered).toContain(['- id: agent-default-model', '  config:', '    provider: spark-local', '    model: deepseek-v4.1-flash',
+      '    reasoningEffort: max'].join('\n'))
+    // The OpenCode Go fallback stays declared, so the route set does not depend on the custom one.
+    expect(rendered).toContain('      opencode-go:')
+    expect(rendered).not.toContain('{{')
+  })
+
+  it('omits reasoningEffort when the route does not name one, and defaults the api to openai-completions', () => {
+    const rendered = renderProfilePatch(readTemplate(), { port: 1, stateDir: '/s', platform: 'win32',
+      model: { provider: 'spark-local', model: 'm', baseURL: 'http://127.0.0.1:18790/v1', apiKeyEnv: 'SPARK_API_KEY' } })
+    expect(rendered).toContain('        api: openai-completions')
+    expect(rendered).toContain('        apiKeyEnv: SPARK_API_KEY')
+    expect(rendered).not.toContain('reasoningEffort:')
+  })
+
+  it('quotes YAML scalars that would otherwise change type or break the document', () => {
+    expect(yamlScalar('max')).toBe('max')
+    expect(yamlScalar('deepseek-v4.1-flash')).toBe('deepseek-v4.1-flash')
+    expect(yamlScalar('off')).toBe('"off"')
+    expect(yamlScalar('Bearer token')).toBe('"Bearer token"')
+    expect(yamlScalar('http://127.0.0.1:18790/v1')).toBe('"http://127.0.0.1:18790/v1"')
+    expect(yamlScalar('a"b')).toBe('"a\\"b"')
+  })
+})
+
+/** The shipped profile template, so the tests exercise the file the cluster tool renders. */
+function readTemplate(): string {
+  return readFileSync(join(import.meta.dirname, '..', 'tools', 'profile-template.yml'), 'utf8')
+}
 
 describe('cluster instances', () => {
   it('validates repositories and derives unique names and profiles', () => {

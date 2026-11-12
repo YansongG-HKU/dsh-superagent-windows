@@ -191,6 +191,15 @@ does the same for an existing instance that needs repair.
 - A hosted DSH Desktop instance cannot be started or stopped by the tool, but it can be registered as an
   `external` entry so `status` covers it in the same view.
 
+Each instance's default model comes from `tools/profile-template.yml`. Without further configuration that is
+the DeepSeek Desktop account sign-in (`deepseek-account` / `deepseek-flash` / `reasoningEffort: max`), as it
+always was. An instance, or the cluster's `defaults`, may instead carry a `model` object in
+`~/.dsh/superagent-cluster.json` with `provider`, `model` and an optional `reasoningEffort`; a `baseURL` also
+declares that provider as a custom `llm-pi-ai` route with optional `api` (default `openai-completions`),
+`headers`, `apiKeyEnv`, `contextWindow`, `reasoningEfforts` and `compat`, which is how a self-deployed
+OpenAI-compatible endpoint serves every instance. `setup` and `doctor` print each instance's route; see
+[tools/README.md](tools/README.md#model-route-per-instance) for the field-by-field rules and an example.
+
 Practical limits: every instance is a full DSH runtime (a few hundred MB of memory), and GitHub rate limits are
 per agent account — the Source polls the repository's notifications and event streams about once a minute, so a
 handful of repositories is comfortable, dozens are not. Instances that use the same agent account need that

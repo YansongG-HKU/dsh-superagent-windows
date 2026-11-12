@@ -232,7 +232,7 @@ Validation inherits an omitted base from the saved override, drops removed parts
 
 ### Sessions
 
-`Sessions` (`src/app/sessions.ts`) manages DeepSeek Harness Sessions for both roles. `ensure` creates a Session with its role's model. `install` follows agent events and registers prompts, skills and tools for managed Sessions.
+`Sessions` (`src/app/sessions.ts`) manages DeepSeek Harness Sessions for both roles. `ensure` creates a Session with its role's model; a configured role model that does not resolve is reported on the `models` health entry, and the Session falls back to the profile's default model instead of failing the plugin load. `install` follows agent events and registers prompts, skills and tools for managed Sessions.
 
 `prompt` delivers once per request id. `relay` and `notify` enqueue main-Session messages handled by the `relay` and `notice` effects. `src/app/notices.ts` defines their content; `delivery` checks whether a message arrived.
 
@@ -450,7 +450,7 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `tests/draft.spec.ts`, `tests/prompt-config.spec.ts`, `tests/markdown.spec.ts`, `tests/marks.spec.ts` | Draft states, merges and the save bar's line; the prompt configuration by section and the line diff; the Markdown subset and its links; the mark of every state the views classify |
 | `tests/locales.spec.ts`, `tests/styles.spec.ts` | The copy in both languages, the stylesheet |
 | `tests/class-docs.spec.ts` | Every class in `src` has a JSDoc block before it |
-| `tests/cluster.spec.ts` | The multi-repository cluster tool (`tools/cluster.mjs`): its profile template, repository/instance naming, port allocation, prepare command, Web URL detection, path expansion and host-environment scrubbing |
+| `tests/cluster.spec.ts` | The multi-repository cluster tool (`tools/cluster.mjs`): its profile template and model route, repository/instance naming, port allocation, prepare command, Web URL detection, path expansion and host-environment scrubbing |
 | `tests/cluster-admin.spec.ts` | The host-side cluster administration behind the panel page: availability reasons, instance probing, stopped rows, and the refusals of malformed or duplicate repositories and unknown instances |
 | `tests/panel-cluster.spec.tsx` | The cluster page: repository instances with their panel links and controls, starting one, adding a repository, and the unavailable explanation |
 | `tests/docs.spec.ts` | Numbered documents link only to earlier ones, every local link resolves, no document has merge conflict markers, and this document's tables list every module and every test |

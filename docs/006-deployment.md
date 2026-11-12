@@ -23,7 +23,7 @@ Both presets run with `danger-full-access` as the operator's OS user and read me
 - Node.js 22.19+ or 24+, pnpm, git 2.32+, Python 3.8+ and tmux
 - GitHub CLI (`gh`) 2.48 or later. Source CLI fields must point to `gh` or `lark-cli` wrappers; the host relies on their subcommands and output formats.
 - A repository on github.com; GitHub Enterprise Server is not supported. To create a checkout per Ticket, keep a local clone from which the prepare command can add worktrees. Install `git-lfs` if that repository uses Git LFS.
-- A model provider configured for DeepSeek Harness. dsh-superagent uses the profile's default model unless the Eval or Execution settings name another.
+- A model provider configured for DeepSeek Harness. dsh-superagent uses the profile's default model unless the Eval or Execution settings name another. In cluster mode each instance's profile default model is rendered by `tools/cluster.mjs` from `tools/profile-template.yml`: the cluster file's instance or `defaults` `model` object selects the route, and a `model` with a `baseURL` declares a self-deployed OpenAI-compatible provider. Without one every instance keeps the DeepSeek Desktop account route (see the model route section of `tools/README.md`).
 - For Feishu: `lark-cli` (tested with 1.0.90) and a Feishu or Lark app with a bot
 
 ## Accounts
@@ -185,7 +185,7 @@ Health entries are grouped by responsibility:
 | Entry | Reports |
 | --- | --- |
 | `runtime` | The application itself |
-| `models` | Sessions waiting on a model-budget retry |
+| `models` | Sessions waiting on a model-budget retry; a configured Eval or Executor role model that no longer resolves, whose Sessions fall back to the profile's default model |
 | `evals` | Unavailable Evals from the last hour with no later judgement or dismissal |
 | `assessment`, `launch`, `delivery`, `relay`, `notice`, `reply` | Stored work described in [003 Execution](003-execution.md); delivery counts waiting work, while reply covers Channel messages |
 | `worker` | Executor Session event handling; appears after its first failure |

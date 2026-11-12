@@ -47,6 +47,173 @@ export function renderTemplate(template, values) {
   return rendered
 }
 
+// ---------------------------------------------------------------------------------------------
+// Model route: what the rendered profile uses as the DSH default model, and the custom
+// `llm-pi-ai` provider a self-deployed endpoint needs. Values live in the cluster config's
+// `defaults.model` and per-instance `model` objects; a cluster written before this option has
+// neither and renders the DeepSeek Desktop account route, as it always did.
+// ---------------------------------------------------------------------------------------------
+
+/** pi-ai reasoning levels a route or model entry may name, in escalation order. */
+export const REASONING_EFFORTS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
+/** Wire protocols an explicitly declared pi-ai route may name (the adapter's supported set). */
+export const PI_AI_PROTOCOLS = ['openai-completions', 'openai-responses', 'anthropic-messages']
+/** The route rendered when neither an instance nor `defaults` configures one: the DSH Desktop account sign-in. */
+export const DEFAULT_MODEL_ROUTE = Object.freeze({ provider: 'deepseek-account', model: 'deepseek-flash', reasoningEffort: 'max' })
+const MODEL_FIELDS = new Set(['provider', 'model', 'reasoningEffort', 'baseURL', 'api', 'apiKeyEnv', 'headers', 'contextWindow',
+  'reasoningEfforts', 'compat'])
+/** `model` fields that only make sense on the custom provider route declared by a `baseURL`. */
+const PROVIDER_FIELDS = ['api', 'apiKeyEnv', 'headers', 'contextWindow', 'reasoningEfforts', 'compat']
+const PROVIDER_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/
+const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._/:@+-]{0,199}$/
+const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/
+const HEADER_NAME = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/
+const COMPAT_NAME = /^[A-Za-z][A-Za-z0-9]*$/
+/** Scalars that a YAML reader could take for another type stay quoted. */
+const YAML_RESERVED = /^(?:true|false|null|yes|no|on|off|y|n|~)$/i
+
+/** Render a YAML scalar: plain when unambiguously safe, double-quoted (JSON escaping) otherwise. */
+export function yamlScalar(value) {
+  const text = String(value)
+  if (/^[A-Za-z0-9_][A-Za-z0-9_./+-]*$/.test(text) && !YAML_RESERVED.test(text)) return text
+  return JSON.stringify(text)
+}
+
+function modelText(value, field, pattern, max) {
+  if (typeof value !== 'string') throw new Error(`model.${field} must be a string`)
+  const text = value.trim()
+  if (!text) throw new Error(`model.${field} must not be empty`)
+  if (text.length > max) throw new Error(`model.${field} must be at most ${max} characters`)
+  if (!pattern.test(text)) throw new Error(`model.${field} is not valid: ${JSON.stringify(text)}`)
+  return text
+}
+
+function modelObject(value, field) {
+  if (value === undefined || value === null) return undefined
+  if (typeof value !== 'object' || Array.isArray(value)) throw new Error(`model.${field} must be an object`)
+  return value
+}
+
+/**
+ * Validate and normalize a cluster `model` object. Absent (or null) input keeps the backward-compatible
+ * DeepSeek Desktop route; a present one requires provider and model, takes an optional reasoning effort
+ * from the pi-ai levels, and — with a `baseURL` — the custom provider's optional settings.
+ */
+export function normalizeModelConfig(input) {
+  if (input === undefined || input === null) return { ...DEFAULT_MODEL_ROUTE }
+  if (typeof input !== 'object' || Array.isArray(input)) throw new Error('model must be an object')
+  const unknown = Object.keys(input).filter(key => !MODEL_FIELDS.has(key))
+  if (unknown.length) throw new Error(`model has unknown field(s): ${unknown.join(', ')}`)
+  const route = { provider: modelText(input.provider, 'provider', PROVIDER_NAME, 80), model: modelText(input.model, 'model', MODEL_ID, 200) }
+  if (input.reasoningEffort !== undefined && input.reasoningEffort !== null) {
+    if (!REASONING_EFFORTS.includes(input.reasoningEffort)) throw new Error(`model.reasoningEffort must be one of ${REASONING_EFFORTS.join(', ')}`)
+    route.reasoningEffort = input.reasoningEffort
+  }
+  if (input.baseURL !== undefined && input.baseURL !== null) {
+    if (typeof input.baseURL !== 'string') throw new Error('model.baseURL must be a string')
+    const baseURL = input.baseURL.trim()
+    if (baseURL.length > 2048) throw new Error('model.baseURL must be at most 2048 characters')
+    let url
+    try { url = new URL(baseURL) } catch { throw new Error(`model.baseURL must be an absolute http(s) URL, got ${JSON.stringify(baseURL)}`) }
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error(`model.baseURL must be an http(s) URL, got ${JSON.stringify(baseURL)}`)
+    route.baseURL = baseURL
+  }
+  for (const field of PROVIDER_FIELDS) {
+    if (input[field] !== undefined && input[field] !== null && !route.baseURL) {
+      throw new Error(`model.${field} needs model.baseURL: the custom llm-pi-ai provider is only declared for an explicit endpoint`)
+    }
+  }
+  if (input.api !== undefined && input.api !== null) {
+    if (!PI_AI_PROTOCOLS.includes(input.api)) throw new Error(`model.api must be one of ${PI_AI_PROTOCOLS.join(', ')}`)
+    route.api = input.api
+  }
+  if (input.apiKeyEnv !== undefined && input.apiKeyEnv !== null) {
+    if (typeof input.apiKeyEnv !== 'string' || !ENV_NAME.test(input.apiKeyEnv)) throw new Error('model.apiKeyEnv must be an environment variable name')
+    route.apiKeyEnv = input.apiKeyEnv
+  }
+  const headers = modelObject(input.headers, 'headers')
+  if (headers && Object.keys(headers).length) {
+    route.headers = {}
+    for (const [name, value] of Object.entries(headers)) {
+      if (!HEADER_NAME.test(name)) throw new Error(`model.headers has an invalid header name: ${JSON.stringify(name)}`)
+      if (typeof value !== 'string' || /[\r\n]/.test(value)) throw new Error(`model.headers.${name} must be a single-line string`)
+      route.headers[name] = value
+    }
+  }
+  const compat = modelObject(input.compat, 'compat')
+  if (compat && Object.keys(compat).length) {
+    route.compat = {}
+    for (const [name, value] of Object.entries(compat)) {
+      if (!COMPAT_NAME.test(name)) throw new Error(`model.compat has an invalid field: ${JSON.stringify(name)}`)
+      if (!(typeof value === 'boolean' || typeof value === 'string' || value === null)) throw new Error(`model.compat.${name} must be a boolean, a string or null`)
+      route.compat[name] = value
+    }
+  }
+  if (input.contextWindow !== undefined && input.contextWindow !== null) {
+    if (!Number.isInteger(input.contextWindow) || input.contextWindow <= 0) throw new Error('model.contextWindow must be a positive integer')
+    route.contextWindow = input.contextWindow
+  }
+  const efforts = modelObject(input.reasoningEfforts, 'reasoningEfforts')
+  if (efforts) {
+    const entries = Object.entries(efforts)
+    if (!entries.length) throw new Error('model.reasoningEfforts must declare at least one level, or be omitted')
+    route.reasoningEfforts = {}
+    for (const [level, wire] of entries) {
+      if (!REASONING_EFFORTS.includes(level)) throw new Error(`model.reasoningEfforts has an unknown level ${JSON.stringify(level)}; use ${REASONING_EFFORTS.join(', ')}`)
+      if (!(typeof wire === 'string' || wire === null)) throw new Error(`model.reasoningEfforts.${level} must be a string or null`)
+      if (wire === '') throw new Error(`model.reasoningEfforts.${level} must not be empty; use null to send no effort value`)
+      route.reasoningEfforts[level] = wire
+    }
+    if (!entries.some(([level]) => level !== 'off')) throw new Error('model.reasoningEfforts must offer a level beyond "off"')
+  }
+  return route
+}
+
+/**
+ * The normalized model route of one instance: its own `model` over the cluster `defaults.model`, field by
+ * field (a nested `headers`, `reasoningEfforts` or `compat` map is replaced as a whole, not merged).
+ */
+export function modelRouteOf(config, instance) {
+  const defaults = config?.defaults?.model, own = instance?.model
+  if ((defaults === undefined || defaults === null) && (own === undefined || own === null)) return { ...DEFAULT_MODEL_ROUTE }
+  const merged = { ...(defaults ?? {}), ...(own ?? {}) }
+  try { return normalizeModelConfig(merged) } catch (error) {
+    const target = instance?.name ? `instance ${instance.name}` : 'cluster defaults'
+    throw new Error(`${target}: ${error instanceof Error ? error.message : String(error)}`)
+  }
+}
+
+/** Render the `llm-pi-ai` patch row: the OpenCode Go fallback, plus the custom `baseURL` route when one is configured. */
+export function renderModelProviders(route) {
+  const lines = ['- id: llm-pi-ai', '  config:', '    providers:']
+  // A custom route that is itself `opencode-go` replaces the fallback declaration instead of repeating it.
+  if (!(route.baseURL && route.provider === 'opencode-go')) lines.push('      opencode-go:', '        apiKeyEnv: OPENCODE_GO_API_KEY')
+  if (!route.baseURL) return lines.join('\n')
+  lines.push(`      ${yamlScalar(route.provider)}:`)
+  lines.push(`        api: ${yamlScalar(route.api ?? 'openai-completions')}`)
+  if (route.apiKeyEnv) lines.push(`        apiKeyEnv: ${yamlScalar(route.apiKeyEnv)}`)
+  if (route.headers) {
+    lines.push('        headers:')
+    for (const [name, value] of Object.entries(route.headers)) lines.push(`          ${yamlScalar(name)}: ${yamlScalar(value)}`)
+  }
+  lines.push(`        baseURL: ${yamlScalar(route.baseURL)}`)
+  if (route.compat) {
+    lines.push('        compat:')
+    for (const [name, value] of Object.entries(route.compat)) {
+      lines.push(`          ${yamlScalar(name)}: ${typeof value === 'boolean' || value === null ? String(value) : yamlScalar(value)}`)
+    }
+  }
+  lines.push('        models:', `          - id: ${yamlScalar(route.model)}`)
+  if (route.contextWindow) lines.push(`            contextWindow: ${route.contextWindow}`)
+  if (route.reasoningEfforts) {
+    lines.push('            reasoningEfforts:')
+    for (const [level, wire] of Object.entries(route.reasoningEfforts)) {
+      lines.push(`              ${yamlScalar(level)}: ${wire === null ? 'null' : yamlScalar(wire)}`)
+    }
+  }
+  return lines.join('\n')
+}
+
 /** Validate and normalize an `owner/name` repository. */
 export function normalizeRepository(value) {
   const repository = String(value ?? '').trim()
@@ -96,12 +263,17 @@ export function originOf(url) {
   try { return new URL(url).origin } catch { return undefined }
 }
 
-/** Render the profile patch for an instance and platform. */
-export function renderProfilePatch(template, { port, stateDir, platform = process.platform }) {
+/** Render the profile patch for an instance and platform; `model` is an instance/`defaults` model object. */
+export function renderProfilePatch(template, { port, stateDir, platform = process.platform, model }) {
+  const route = normalizeModelConfig(model)
   return renderTemplate(template, {
     port,
     stateDir: String(stateDir).replaceAll('\\', '/').replace(/\/$/, ''),
     desktopPlatform: platform === 'win32' || platform === 'darwin' ? platform : 'win32',
+    modelProviders: renderModelProviders(route),
+    modelProvider: yamlScalar(route.provider),
+    modelModel: yamlScalar(route.model),
+    modelReasoningEffort: route.reasoningEffort ? `    reasoningEffort: ${yamlScalar(route.reasoningEffort)}` : '',
   })
 }
 
@@ -341,11 +513,19 @@ async function commandAdd(options) {
   console.log('next: node tools/cluster.mjs setup --name ' + name)
 }
 
+/** `provider/model` (and endpoint) of an instance's route, or `invalid` when the model config cannot be normalized. */
+function modelLabel(config, instance) {
+  try {
+    const route = modelRouteOf(config, instance)
+    return `${route.provider}/${route.model}${route.baseURL ? ` @ ${route.baseURL}` : ''}`
+  } catch { return 'invalid' }
+}
+
 function printInstances(config) {
   const rows = [
-    ['NAME', 'PROFILE', 'PORT', 'REPOSITORY', 'STATE DIR', 'AGENT'],
+    ['NAME', 'PROFILE', 'PORT', 'REPOSITORY', 'MODEL', 'STATE DIR', 'AGENT'],
     ...config.instances.map(instance => [instance.name, instance.profile, String(instance.port), instance.repository,
-      instance.stateDir, `@${instance.agentLogin}`]),
+      modelLabel(config, instance), instance.stateDir, `@${instance.agentLogin}`]),
   ]
   for (const row of rows) console.log(row.join('  '))
   if (config.external.length) {
@@ -368,6 +548,10 @@ async function commandDoctor(options) {
   try { run(config.defaults.agentCli, ['version'], { quiet: true }); check(true, `gh CLI: ${config.defaults.agentCli}`) }
   catch { check(false, `gh CLI not runnable: ${config.defaults.agentCli}`) }
   for (const instance of config.instances) {
+    try {
+      const route = modelRouteOf(config, instance)
+      check(true, `${instance.name}: model ${route.provider}/${route.model}${route.baseURL ? ` @ ${route.baseURL}` : ''}`)
+    } catch (error) { check(false, `${instance.name}: ${error instanceof Error ? error.message : String(error)}`) }
     const state = await readJson(stateFile(configFile, instance.name))
     if (state && isAlive(state.pid)) check(true, `${instance.name}: running (pid ${state.pid})`)
     else check(await portFree(instance.port), `${instance.name}: port ${instance.port} is free`)
@@ -450,12 +634,14 @@ async function commandSetup(options) {
   const bundleName = JSON.parse(readFileSync(join(config.bundle, 'package.json'), 'utf8')).name
   for (const instance of instances) {
     if (instance.enabled === false) continue
+    // Validate the route before creating anything: a broken model object must not leave a half-configured profile.
+    const model = modelRouteOf(config, instance)
     const profileDir = join(dshHome, 'profiles', instance.profile)
     if (!existsSync(profileDir)) {
       console.log(`creating profile ${instance.profile} from the web template ...`)
       await runDsh(config, [instance.profile, '--from-default-profile', 'web', '--dump-config'], { quiet: true, env: { DSH_HOME: dshHome } })
     }
-    const rendered = renderProfilePatch(template, { port: instance.port, stateDir: instance.stateDir })
+    const rendered = renderProfilePatch(template, { port: instance.port, stateDir: instance.stateDir, model })
     await writeFile(join(profileDir, 'cordis.patch.yml'), rendered)
     const profilePackage = join(profileDir, 'package.json')
     const profile = JSON.parse(readFileSync(profilePackage, 'utf8'))
@@ -468,7 +654,7 @@ async function commandSetup(options) {
     await mkdir(instance.stateDir, { recursive: true })
     await ensureHostEntry(instance.stateDir, instance.agentLogin, instance.agentCli)
     const cloned = await ensureClone(instance, config)
-    console.log(`${instance.name}: profile=${instance.profile} port=${instance.port} state=${instance.stateDir}${cloned ? ' clone=created' : ''}`)
+    console.log(`${instance.name}: profile=${instance.profile} port=${instance.port} model=${model.provider}/${model.model}${model.baseURL ? ` @ ${model.baseURL}` : ''} state=${instance.stateDir}${cloned ? ' clone=created' : ''}`)
   }
   console.log('\nsetup done; next: node tools/cluster.mjs start')
 }
@@ -665,6 +851,9 @@ commands:
   upgrade     rebuild the bundle and restart the running instances
   logs        tail an instance log  --name <instance> [--lines 80]
   help        this text
+
+model route: the cluster config's defaults.model, or an instance's model object, selects the rendered
+             profile's default model; a baseURL there declares a custom llm-pi-ai provider (tools/README.md)
 `
 
 async function main() {

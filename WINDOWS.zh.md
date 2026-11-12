@@ -159,6 +159,14 @@ node tools/cluster.mjs status
   `doctor` 检查路径、agent 身份、push 权限和端口占用；`logs --name <n>` 看单个实例日志。
 - 桌面内嵌实例不能由工具启停，但可以作为 `external` 条目纳入 `status` 的统一视图。
 
+每个实例的默认模型来自 `tools/profile-template.yml`。不做额外配置时就是 DeepSeek 桌面版账号登录那条路由
+（`deepseek-account` / `deepseek-flash` / `reasoningEffort: max`），与以前一致。也可以在
+`~/.dsh/superagent-cluster.json` 的实例或 `defaults` 上写 `model` 对象：`provider`、`model` 必填，
+`reasoningEffort` 可选；带 `baseURL` 时会额外声明一个自定义 `llm-pi-ai` provider 路由，可配 `api`
+（默认 `openai-completions`）、`headers`、`apiKeyEnv`、`contextWindow`、`reasoningEfforts` 和 `compat`，
+这就是让自部署 OpenAI-compatible 端点服务所有实例的方式。`setup` 和 `doctor` 会打印每个实例的模型路由；
+字段规则与示例见 [tools/README.md](tools/README.md#model-route-per-instance)。
+
 实际限制：每个实例是一个完整 DSH 运行时（几百 MB 内存），GitHub 速率限制按 agent 账号计算——
 Source 约每分钟轮询一次，因此几个到十几个仓库是舒服的，几十个不现实。共用同一 agent 账号时，
 该账号必须是每个仓库的协作者；需要按仓库分团队或分凭据时，在 `add` 时给实例单独的 `--agent-login`/`--agent-cli`。

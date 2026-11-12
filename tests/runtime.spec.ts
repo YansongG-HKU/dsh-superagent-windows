@@ -1829,3 +1829,20 @@ it('keeps the Policy the main Session judges by in its prompt, after admission a
   expect(policy()).toContain('No rule is enabled: a proactive candidate can only be ignored.')
   expect(policy()).toContain('The accept mode and the rules decide proactive candidates only')
 })
+
+it('starts with a models health error instead of failing when a configured role model cannot be resolved', async () => {
+  // The route was valid when saved and later disappeared. The main Session must still be created, under the profile's
+  // default model, and the `models` health entry must name the setting to repair.
+  const store = new Store(join(directory, 'orchestrator.sqlite'))
+  seed(store)
+  store.saveSettings({ ...store.settings(), eval: { ...store.settings().eval, model: { provider: 'nowhere', model: 'x', reasoningEffort: 'max' } } })
+  store.close()
+  vi.mocked(services.llm as { resolveCallConfig: ReturnType<typeof vi.fn> }).resolveCallConfig
+    .mockRejectedValueOnce(new Error('unknown provider nowhere'))
+  const next = await restart()
+  await next.ready
+  expect(next.configured()).toBe(true)
+  expect(next.health.models).toMatchObject({ state: 'error' })
+  expect(next.health.models?.detail).toContain('The eval model nowhere/x is unavailable (unknown provider nowhere)')
+  expect(next.health.models?.detail).toContain("its Sessions use the profile's default model")
+})

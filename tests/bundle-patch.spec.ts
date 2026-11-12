@@ -4,6 +4,7 @@ import { createRequire } from 'node:module'
 import { join } from 'node:path'
 import { expect, it } from 'vitest'
 import { ROUTER_PRESET, WORKER_PRESET } from '../src/app/sessions.ts'
+import { renderProfilePatch } from '../tools/cluster.mjs'
 
 interface Row { id?: string; name: string; disabled?: unknown; config?: Record<string, unknown> & { plugins?: Row[] } | Row[] }
 /** The patch as DSH reads it: Cordis's include plugin parses `!!js` scalars, and applies the inserts to an entry list. */
@@ -19,6 +20,22 @@ async function patched(): Promise<Row[]> {
   expect(warnings).toEqual([])
   return rows
 }
+/** A profile patch row, as the YAML reader returns it. */
+interface ProfileRow { id: string; config?: Record<string, unknown> }
+
+/**
+ * The profile patch the cluster tool (`tools/cluster.mjs setup`) writes into every instance's profile, rendered from
+ * the shipped template and read back as YAML, so the template's placeholders and the tool's model routing are covered.
+ */
+async function profileRows(model?: unknown): Promise<ProfileRow[]> {
+  const cordis = createRequire(createRequire(import.meta.url).resolve('@deepseek-ai/cordis/package.json'))
+  const include = cordis.resolve('@deepseek-ai/cordis-plugin-include')
+  const yaml = await import(createRequire(include).resolve('js-yaml')) as { load(text: string): unknown }
+  const template = readFileSync(join(import.meta.dirname, '..', 'tools', 'profile-template.yml'), 'utf8')
+  return yaml.load(renderProfilePatch(template, { port: 3082, stateDir: '/srv/dsh', platform: 'win32', model })) as ProfileRow[]
+}
+const profileRow = (rows: readonly ProfileRow[], id: string): ProfileRow => rows.find(row => row.id === id)!
+
 /** Every plugin row of a preset, those inside groups too. */
 const flat = (rows: readonly Row[]): Row[] => rows.flatMap(row => [row, ...Array.isArray(row.config) ? flat(row.config) : []])
 
@@ -70,4 +87,22 @@ it('defines the router preset the main Session runs under: the worker\'s 5-secon
     '@deepseek-ai/dsh-tool-todo', '@deepseek-ai/dsh-tool-ask-user', '@deepseek-ai/dsh-tool-present', '@deepseek-ai/dsh-plan-mode',
     '@deepseek-ai/dsh-plugin-manager/tools', '@deepseek-ai/dsh-plugin-market/tools', '@deepseek-ai/dsh-tool-schedule', '@deepseek-ai/dsh-tool-goal',
     '@deepseek-ai/dsh-command-goal', '@deepseek-ai/dsh-tool-workflow', '@deepseek-ai/dsh-workflow-ptc']) expect(names, name).not.toContain(name)
+})
+
+it('renders the cluster profile template: the DeepSeek Desktop route by default, a declared llm-pi-ai route for a custom endpoint', async () => {
+  const rows = await profileRows()
+  expect(rows.map(row => row.id)).toEqual(['webserver', 'deepseek-account', 'llm-deepseek-account', 'llm-pi-ai',
+    'agent-default-model', 'dsh-superagent'])
+  // A cluster configured before the model option renders exactly the route it always did.
+  expect(profileRow(rows, 'agent-default-model').config).toEqual({ provider: 'deepseek-account', model: 'deepseek-flash', reasoningEffort: 'max' })
+  expect(profileRow(rows, 'llm-pi-ai').config).toEqual({ providers: { 'opencode-go': { apiKeyEnv: 'OPENCODE_GO_API_KEY' } } })
+  const custom = await profileRows({ provider: 'spark-local', model: 'deepseek-v4.1-flash', reasoningEffort: 'max',
+    baseURL: 'http://127.0.0.1:18790/v1', headers: { Authorization: 'Bearer local-placeholder' }, contextWindow: 1048576,
+    reasoningEfforts: { low: 'low', medium: 'medium', high: 'high', max: 'max' } })
+  expect(profileRow(custom, 'agent-default-model').config).toEqual({ provider: 'spark-local', model: 'deepseek-v4.1-flash', reasoningEffort: 'max' })
+  const providers = profileRow(custom, 'llm-pi-ai').config!.providers as Record<string, unknown>
+  expect(providers['opencode-go']).toEqual({ apiKeyEnv: 'OPENCODE_GO_API_KEY' })
+  expect(providers['spark-local']).toEqual({ api: 'openai-completions', headers: { Authorization: 'Bearer local-placeholder' },
+    baseURL: 'http://127.0.0.1:18790/v1', models: [{ id: 'deepseek-v4.1-flash', contextWindow: 1048576,
+      reasoningEfforts: { low: 'low', medium: 'medium', high: 'high', max: 'max' } }] })
 })
