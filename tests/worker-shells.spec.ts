@@ -59,7 +59,8 @@ describe('scopeWorkerShells', () => {
     expect(box.spawned).toHaveLength(1)
     expect(box.spawned[0]!.env).toMatchObject({ GIT_CONFIG_GLOBAL: workerGitConfig(stateDir), GIT_CONFIG_NOSYSTEM: '1',
       ...WINDOWS ? { GH_CONFIG_DIR: agentGhConfig(stateDir) } : {} })
-    expect(box.spawned[0]!.env!.PATH!.split(';').concat(box.spawned[0]!.env!.PATH!.split(':'))[0]).toBe(workerBin(stateDir))
+    const pathSeparator = WINDOWS ? ';' : ':'
+    expect(box.spawned[0]!.env!.PATH!.split(pathSeparator)[0]).toBe(workerBin(stateDir))
   })
 
   it('leaves a spawn of the host Session, or of no attributable Session, untouched', () => {

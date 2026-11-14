@@ -15,9 +15,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 - A configured Eval or Executor role model that no longer resolves no longer fails plugin startup. The affected Sessions fall back to the profile's default model, and the `models` health entry (plus a warning log) names the setting to repair; an unset role model still inherits the default, and settings saves still validate a model before storing it.
 - `docs/006-deployment.md` documents the cluster model route and the `models` health entry's fallback; `docs/007-architecture.md`, `SETUP.md`, `WINDOWS.md`/`WINDOWS.zh.md` and `tools/README.md` are updated to match.
 
+### Fixed
+
+- **Cross-platform CI.** `tests/worker-shells.spec.ts` picked the `PATH` separator with a `;`-first heuristic, so the Linux runner compared the whole `PATH` string against `workerBin` and failed; the assertion now selects the separator by platform. `ubuntu-latest` and `windows-latest` both pass.
+
 ### Verified
 
 - `vitest`: 1214 passed, 33 skipped (63 test files pass, `tests/service-script.spec.ts` is skipped on this platform), including 9 new tests: the cluster model route's rendering and validation, the shipped profile template's rendered route, and the role-model startup fallback.
+- Cross-platform CI (`ubuntu-latest` + `windows-latest`): green; the Linux runner reports 1239 passed / 7 skipped (Windows-only tests skipped).
 
 ## [0.3.2] — 2026-11-06
 
