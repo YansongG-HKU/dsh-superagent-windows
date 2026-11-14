@@ -3,6 +3,17 @@
 All notable changes to `dsh-superagent` are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow [SemVer](https://semver.org/).
 
+## [0.3.4] — 2026-11-15
+
+### Changed
+
+- Align with DeepSeek Harness 0.2.2-rc.3: every `@deepseek-ai/dsh-*` peer dependency moves from `^0.2.2-rc.1` to `^0.2.2-rc.3` and `engines.dsh` to `>=0.2.2-rc.3`; Windows port behaviour is unchanged.
+- `package.json` version is 0.3.4; the panel and the tools read the same manifest version.
+
+### Verified
+
+- `pnpm typecheck` clean; `vitest`: 1214 passed, 33 skipped; GitHub Actions `ubuntu-latest` and `windows-latest` green.
+
 ## [0.3.3] — 2026-11-12
 
 ### Added
