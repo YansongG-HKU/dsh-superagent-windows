@@ -1,0 +1,18 @@
+{
+  "tickets": [
+    {
+      "id": "ticket-grocery",
+      "title": "Grocery list"
+    },
+    {
+      "id": "ticket-release",
+      "title": "Release checklist"
+    }
+  ],
+  "triggers": [
+    {
+      "id": "tr-budget",
+      "text": "Draft budget"
+    }
+  ]
+}

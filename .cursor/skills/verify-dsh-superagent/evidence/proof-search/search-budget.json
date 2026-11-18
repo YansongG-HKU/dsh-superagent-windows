@@ -1,0 +1,38 @@
+{
+  "status": 200,
+  "body": {
+    "tickets": [],
+    "items": [
+      {
+        "id": "tr-budget",
+        "source": "github",
+        "actor": {
+          "source": "github",
+          "id": "operator",
+          "name": {
+            "zh": "operator",
+            "en": "operator"
+          }
+        },
+        "human": true,
+        "at": "2026-11-18T02:31:45.271Z",
+        "preview": "Draft budget",
+        "threads": [
+          "github:42"
+        ],
+        "actions": {
+          "requeue": false
+        },
+        "disposition": {
+          "queued": false,
+          "evaluating": false,
+          "delivered": false,
+          "fanout": [],
+          "handbacks": []
+        },
+        "threadTitle": "#42"
+      }
+    ],
+    "threads": []
+  }
+}

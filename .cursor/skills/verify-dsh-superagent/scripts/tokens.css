@@ -1,0 +1,36 @@
+/* Verification scaffolding. DeepSeek Harness defines these tokens in the Desktop and Web
+   shells. This stand-in supplies a readable palette so the real panel CSS can paint.
+   It is not the Windows host theme. */
+:root {
+  --dsw-alias-label-primary: #1c2430;
+  --dsw-alias-label-primary-foreground: #ffffff;
+  --dsw-alias-label-secondary: #3d4a5c;
+  --dsw-alias-label-tertiary: #5c6b7e;
+  --dsw-alias-label-caption: #6d7b8c;
+  --dsw-alias-border-l2: #e1e6ee;
+  --dsw-alias-border-l3: #cfd6e2;
+  --dsw-alias-border-l4: #b7c1d1;
+  --dsw-alias-bg-base: #f4f6f9;
+  --dsw-alias-bg-layer-1: #ffffff;
+  --dsw-alias-bg-layer-2: #ffffff;
+  --dsw-alias-bg-module-platform: #eef2f7;
+  --dsw-alias-interactive-bg-hover: #e7edf5;
+  --dsw-alias-interactive-bg-active: #dbe3ee;
+  --dsw-alias-brand-primary: #1f6feb;
+  --dsw-alias-link: #1f6feb;
+  --dsw-alias-button-primary-fill: #1f6feb;
+  --dsw-alias-button-primary-hover: #1a5fd0;
+  --dsw-alias-state-error-primary: #b42318;
+  --dsw-alias-state-warn-primary: #b54708;
+  --dsw-alias-state-success-primary: #067647;
+  --dsw-alias-state-business-primary: #175cd3;
+  --dsw-alias-tooltip-bg: #1c2430;
+  --dsw-static-neutral-bluish-00: #ffffff;
+  --dsw-elevation-prominent: 0 8px 24px rgba(28, 36, 48, 0.16);
+  color-scheme: light;
+}
+html, body { height: 100%; margin: 0; background: var(--dsw-alias-bg-base); color: var(--dsw-alias-label-primary);
+  font-family: "Segoe UI", system-ui, sans-serif; }
+#verify-banner { margin: 0; padding: 8px 16px; background: #1c2430; color: #f4f6f9; font-size: 13px; line-height: 20px; }
+#root { height: calc(100% - 36px); }
+input, button { font-family: inherit; }

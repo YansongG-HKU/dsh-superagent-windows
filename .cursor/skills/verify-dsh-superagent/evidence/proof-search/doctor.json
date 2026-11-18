@@ -1,0 +1,24 @@
+{
+  "ok": true,
+  "surface": "linux-panel-stand-in",
+  "packageVersion": "0.3.4",
+  "pid": 7170,
+  "port": 4173,
+  "url": "http://127.0.0.1:4173/",
+  "stateDir": "/tmp/dsh-superagent-verify/state",
+  "clusterConfig": "/tmp/dsh-superagent-verify/cluster.json",
+  "dshOnPath": false,
+  "platform": "linux",
+  "node": "v22.23.4",
+  "setupProbe": "skipped",
+  "sessionCatalog": "absent",
+  "problems": [],
+  "identity": "linux-stand-in",
+  "health": {
+    "runtime": {
+      "state": "ready",
+      "detail": "Linux verification stand-in is serving the panel. GitHub is not being polled and setup was not run."
+    }
+  },
+  "reportedStateDir": "/tmp/dsh-superagent-verify/state"
+}

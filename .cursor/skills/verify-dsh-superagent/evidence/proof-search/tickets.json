@@ -1,0 +1,64 @@
+{
+  "status": 200,
+  "body": {
+    "items": [
+      {
+        "id": "ticket-release",
+        "title": "Release checklist",
+        "state": "open",
+        "stage": "person",
+        "action": "answer",
+        "note": {
+          "text": "Confirm the release checklist",
+          "error": false
+        },
+        "actions": {
+          "retry": false,
+          "stop": true
+        },
+        "strength": "explicit",
+        "attention": {
+          "id": "att-release",
+          "question": "Confirm the release checklist",
+          "triggerId": "tr-budget"
+        },
+        "assignments": 1,
+        "inputs": 0,
+        "undelivered": 0,
+        "sessionId": "worker-ticket-release",
+        "summary": "",
+        "createdAt": "2026-11-18T02:32:15.271Z",
+        "updatedAt": "2026-11-18T02:32:15.271Z",
+        "threads": [
+          {
+            "key": "github:42",
+            "source": "github",
+            "title": "#42",
+            "facts": {}
+          }
+        ]
+      },
+      {
+        "id": "ticket-grocery",
+        "title": "Grocery list",
+        "state": "open",
+        "stage": "working",
+        "actions": {
+          "retry": false,
+          "stop": true
+        },
+        "strength": "explicit",
+        "assignments": 1,
+        "inputs": 0,
+        "undelivered": 0,
+        "sessionId": "worker-ticket-grocery",
+        "summary": "",
+        "createdAt": "2026-11-18T02:31:15.271Z",
+        "updatedAt": "2026-11-18T02:31:15.271Z",
+        "threads": []
+      }
+    ],
+    "total": 2,
+    "next_offset": null
+  }
+}
