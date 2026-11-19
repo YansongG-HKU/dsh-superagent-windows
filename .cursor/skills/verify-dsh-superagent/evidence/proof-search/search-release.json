@@ -1,0 +1,37 @@
+{
+  "status": 200,
+  "body": {
+    "tickets": [
+      {
+        "id": "ticket-release",
+        "title": "Release checklist",
+        "state": "open",
+        "stage": "person",
+        "action": "answer",
+        "note": {
+          "text": "Confirm the release checklist",
+          "error": false
+        },
+        "actions": {
+          "retry": false,
+          "stop": true
+        },
+        "strength": "explicit",
+        "attention": {
+          "id": "att-release",
+          "question": "Confirm the release checklist",
+          "triggerId": "tr-budget"
+        },
+        "assignments": 1,
+        "inputs": 0,
+        "undelivered": 0,
+        "sessionId": "worker-ticket-release",
+        "summary": "",
+        "createdAt": "2026-11-18T02:56:19.281Z",
+        "updatedAt": "2026-11-18T02:56:19.281Z"
+      }
+    ],
+    "items": [],
+    "threads": []
+  }
+}
